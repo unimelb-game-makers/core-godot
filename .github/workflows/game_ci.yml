@@ -48,13 +48,13 @@ jobs:
           commit_message: "Update Github Pages"
 
       - name: Zip Web artifacts
-        run: zip -r game_web.zip build/web
+        run: zip -r "${{ env.PROJECT_NAME }}_web.zip" build/web
 
       - name: Upload Web artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: game_web
-          path: game_web.zip
+          name: ${{ env.PROJECT_NAME }}_web
+          path: ${{ env.PROJECT_NAME }}_web.zip
   Linux:
     runs-on: ubuntu-latest
     permissions:
@@ -78,13 +78,13 @@ jobs:
         run: godot -v --export-release --headless "Linux/X11" --path . --output "build/linux/game.x86_64"
 
       - name: Zip Linux artifacts
-        run: zip -r game_linux.zip build/linux
+        run: zip -r "${{ env.PROJECT_NAME }}_linux.zip" build/linux
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: game_linux
-          path: game_linux.zip
+          name: ${{ env.PROJECT_NAME }}_linux
+          path: ${{ env.PROJECT_NAME }}_linux.zip
   Windows:
     runs-on: ubuntu-latest
     permissions:
@@ -108,13 +108,13 @@ jobs:
         run: godot -v --export-release --headless "Windows Desktop" --path . --output "build/windows/game.x86_64"
 
       - name: Zip Windows artifacts
-        run: zip -r game_windows.zip build/windows
+        run: zip -r "${{ env.PROJECT_NAME }}_windows.zip" build/windows
 
       - name: Upload windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: game_windows
-          path: game_windows.zip
+          name: ${{ env.PROJECT_NAME }}_windows
+          path: ${{ env.PROJECT_NAME }}_windows.zip
   release:
     needs: [Web, Linux, Windows]
     runs-on: ubuntu-latest
@@ -144,17 +144,17 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: game_web
+          name: ${{ env.PROJECT_NAME }}_web
 
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: game_linux
+          name: ${{ env.PROJECT_NAME }}_linux
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: game_windows
+          name: ${{ env.PROJECT_NAME }}_windows
 
       - name: Create Release
         id: create_release
@@ -176,8 +176,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: game_web.zip
-          asset_name: Godot_Game_Web.zip
+          asset_path: ${{ env.PROJECT_NAME }}_web.zip
+          asset_name: "${{ env.PROJECT_NAME }}_web.zip"
           asset_content_type: application/zip
 
       - name: Upload Linux Release Asset
@@ -187,8 +187,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: game_linux.zip
-          asset_name: Godot_Game_Linux.zip
+          asset_path: ${{ env.PROJECT_NAME }}_linux.zip
+          asset_name: "${{ env.PROJECT_NAME }}_linux.zip"
           asset_content_type: application/zip
 
       - name: Upload Windows Release Asset
@@ -198,6 +198,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: game_windows.zip
-          asset_name: Godot_Game_Windows.zip
+          asset_path: ${{ env.PROJECT_NAME }}_windows.zip
+          asset_name: "${{ env.PROJECT_NAME }}_windows.zip"
           asset_content_type: application/zip
