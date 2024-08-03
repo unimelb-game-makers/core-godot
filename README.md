@@ -17,6 +17,6 @@ The file [music.md](./documentation/creative/music.md) contains the music pipeli
 
 
 ## [Technical](./documentation/technical/)
-The file [godot.md](./documentation/technical/godot.md) contains the Godot best practices and guidelines for the project.
+The file [best_practices.md](./documentation/technical/best_practices.md) contains the best practices and guidelines for the project.
 
-The file [unity.md](./documentation/technical/unity.md) contains the Unity best practices and guidelines for the project.
+The file [ci_ci.md](./documentation/technical/ci_cd.md) contains the CI/CD documentation for the project.
