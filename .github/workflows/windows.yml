@@ -1,0 +1,34 @@
+name: Windows
+
+on:
+  workflow_call:
+
+jobs:
+  Windows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: barichello/godot-ci:4.2.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move export templates into position
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates
+          mv /root/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable
+      - name: Create staging directory
+        run: mkdir -v -p build/windows
+
+      - name: Build for Windows
+        run: godot -v --export-release --headless "Windows Desktop" --path . --output "build/windows/game.x86_64"
+
+      - name: Zip Windows artifacts
+        run: zip -r "${{ env.PROJECT_NAME }}_windows.zip" build/windows
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}_windows
+          path: ${{ env.PROJECT_NAME }}_windows.zip
