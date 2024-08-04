@@ -14,11 +14,11 @@ on:
       run_linux:
         description: "Run Linux workflow"
         required: false
-        default: "true"
+        default: "false"
       run_windows:
         description: "Run Windows workflow"
         required: false
-        default: "true"
+        default: "false"
   push:
     branches:
       - main
