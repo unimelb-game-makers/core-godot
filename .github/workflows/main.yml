@@ -6,26 +6,12 @@ env:
 
 on:
   workflow_dispatch:
-    inputs:
-      run_web:
-        description: "Run Web workflow"
-        required: false
-        default: "true"
-      run_linux:
-        description: "Run Linux workflow"
-        required: false
-        default: "false"
-      run_windows:
-        description: "Run Windows workflow"
-        required: false
-        default: "false"
   push:
     branches:
       - main
 
 jobs:
   Web:
-    if: ${{ github.event.inputs.run_web == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -70,68 +56,8 @@ jobs:
           name: ${{ env.PROJECT_NAME }}_web
           path: ${{ env.PROJECT_NAME }}_web.zip
 
-  Linux:
-    if: ${{ github.event.inputs.run_linux == 'true' || github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    container:
-      image: barichello/godot-ci:4.2.2
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Move export templates into position
-        run: |
-          mkdir -v -p ~/.local/share/godot/export_templates
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-      - name: Create staging directory
-        run: mkdir -v -p build/linux
-
-      - name: Build for Linux
-        run: godot -v --export-release --headless "Linux/X11" --path . --output "build/linux/game.x86_64"
-
-      - name: Zip Linux artifacts
-        run: zip -r "${{ env.PROJECT_NAME }}_linux.zip" build/linux
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_linux
-          path: ${{ env.PROJECT_NAME }}_linux.zip
-
-  Windows:
-    if: ${{ github.event.inputs.run_windows == 'true' || github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    container:
-      image: barichello/godot-ci:4.2.2
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Move export templates into position
-        run: |
-          mkdir -v -p ~/.local/share/godot/export_templates
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-      - name: Create staging directory
-        run: mkdir -v -p build/windows
-
-      - name: Build for Windows
-        run: godot -v --export-release --headless "Windows Desktop" --path . --output "build/windows/game.x86_64"
-
-      - name: Zip Windows artifacts
-        run: zip -r "${{ env.PROJECT_NAME }}_windows.zip" build/windows
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_windows
-          path: ${{ env.PROJECT_NAME }}_windows.zip
-
   release:
-    needs: [Web, Linux, Windows]
+    needs: [Web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -156,23 +82,10 @@ jobs:
         id: get_branch
         run: echo "BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_ENV
 
-      - name: Download Web artifacts
-        if: ${{ github.event.inputs.run_web == 'true' }}
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}_web
-
-      - name: Download Linux artifacts
-        if: ${{ github.event.inputs.run_linux == 'true' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_linux
-
-      - name: Download Windows artifacts
-        if: ${{ github.event.inputs.run_windows == 'true' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_windows
 
       - name: Create Release
         id: create_release
@@ -188,8 +101,7 @@ jobs:
           prerelease: true
 
       - name: Upload Web Release Asset
-        if: ${{ github.event.inputs.run_web == 'true' }}
-        id: upload-web-release-asset
+        id: upload-release-asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -199,26 +111,22 @@ jobs:
           asset_name: "${{ env.PROJECT_NAME }}_web.zip"
           asset_content_type: application/zip
 
-      - name: Upload Linux Release Asset
-        if: ${{ github.event.inputs.run_linux == 'true' }}
-        id: upload-linux-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.PROJECT_NAME }}_linux.zip
-          asset_name: "${{ env.PROJECT_NAME }}_linux.zip"
-          asset_content_type: application/zip
+  itch-deploy:
+      needs: [Web]
+      runs-on: ubuntu-latest
+      steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Upload Windows Release Asset
-        if: ${{ github.event.inputs.run_windows == 'true' }}
-        id: upload-windows-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download Web artifacts
+        uses: actions/download-artifact@v4
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.PROJECT_NAME }}_windows.zip
-          asset_name: "${{ env.PROJECT_NAME }}_windows.zip"
-          asset_content_type: application/zip
+          name: ${{ env.PROJECT_NAME }}_web
+
+      - uses: manleydev/butler-publish-itchio-action@master
+        env:
+          BUTLER_CREDENTIALS: ${{ secrets.ITCH_IO_API_KEY }}
+          CHANNEL: HTML
+          ITCH_GAME: github-actions-godot
+          ITCH_USER: gmcunimelb
+          PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
