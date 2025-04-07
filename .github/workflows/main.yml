@@ -62,6 +62,7 @@ jobs:
           path: ${{ env.PROJECT_NAME }}_web.zip
 
   release:
+    if: github.event_name != 'pull_request'
     needs: [Web]
     runs-on: ubuntu-latest
     permissions:
@@ -117,21 +118,22 @@ jobs:
           asset_content_type: application/zip
 
   itch-deploy:
-      needs: [Web]
-      runs-on: ubuntu-latest
-      steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    if: github.event_name != 'pull_request'
+    needs: [Web]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download Web artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_web
+    - name: Download Web artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.PROJECT_NAME }}_web
 
-      - uses: manleydev/butler-publish-itchio-action@master
-        env:
-          BUTLER_CREDENTIALS: ${{ secrets.ITCH_IO_API_KEY }}
-          CHANNEL: HTML
-          ITCH_GAME: godot-ci
-          ITCH_USER: gmcunimelb
-          PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
+    - uses: manleydev/butler-publish-itchio-action@master
+      env:
+        BUTLER_CREDENTIALS: ${{ secrets.ITCH_IO_API_KEY }}
+        CHANNEL: HTML
+        ITCH_GAME: godot-ci
+        ITCH_USER: gmcunimelb
+        PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
