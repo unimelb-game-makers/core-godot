@@ -98,10 +98,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{env.GitVersion_MajorMinorPatch}}
-          release_name: ${{env.GitVersion_MajorMinorPatch}}
+          tag_name: ${{env.GitVersion_FullSemVer}}
+          release_name: ${{env.GitVersion_FullSemVer}}
           body: |
-            Release notes for ${{env.GitVersion_MajorMinorPatch}}
+            Release notes for ${{env.GitVersion_FullSemVer}}
           draft: false
           prerelease: true
 

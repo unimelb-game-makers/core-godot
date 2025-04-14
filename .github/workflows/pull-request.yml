@@ -68,8 +68,8 @@ jobs:
   PR-comment-update:
     needs: [Web]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: 
+      pull-requests: write 
     if: always()
     steps:
       - name: Set preview URL message
