@@ -192,15 +192,6 @@ jobs:
         name: ${{ env.PROJECT_NAME }}_macos
         path: build/macos
 
-    - name: Unzip Builds
-      run: |
-        unzip build/windows/${{ env.PROJECT_NAME }}_windows.zip
-        unzip build/macos/${{ env.PROJECT_NAME }}_macos.zip
-        rm build/windows/${{ env.PROJECT_NAME }}_windows.zip
-        rm build/macos/${{ env.PROJECT_NAME }}_macos.zip
-        ls build/windows
-        ls build/macos
-
     - uses: CyberAndrii/steam-totp@v1
       name: Generate TOTP
       id: steam-totp
