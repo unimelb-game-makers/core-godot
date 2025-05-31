@@ -5,6 +5,7 @@ name: "Godot CI/CD on push to main"
 env:
   GODOT_VERSION: 4.4.1
   PROJECT_NAME: 'ci_example'
+  STEAM_APPID: 3711250
 
 on:
   workflow_dispatch:
@@ -174,3 +175,44 @@ jobs:
         ITCH_GAME: ${{ env.PROJECT_NAME }}
         ITCH_USER: gmcunimelb
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
+  
+  Steam-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: CyberAndrii/steam-totp@v1
+      name: Generate TOTP
+      id: steam-totp
+      with:
+        shared_secret: ${{ secrets.STEAM_SHARED_SECRET }}
+
+    - name: Download Windows Build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.PROJECT_NAME }}_windows
+        path: build/windows
+
+    - name: Download MacOS Build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.PROJECT_NAME }}_macos
+        path: build/macos
+
+    - name: Unzip Builds
+      run: |
+        unzip build/windows/${{ env.PROJECT_NAME }}_windows.zip
+        unzip build/macos/${{ env.PROJECT_NAME }}_macos.zip
+        rm build/windows/${{ env.PROJECT_NAME }}_windows.zip
+        rm build/macos/${{ env.PROJECT_NAME }}_macos.zip
+        ls build/windows
+        ls build/macos
+
+    - uses: game-ci/steam-deploy@v3
+      with:
+        username: ${{ secrets.STEAM_USERNAME }}          
+        totp: ${{ steps.steam-totp.outputs.code }}
+        appId: ${{ env.STEAM_APPID }}
+        buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
+        rootPath: build
+        depot1Path: windows
+        depot2Path: macos
+        releaseBranch: develop
