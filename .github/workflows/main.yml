@@ -54,7 +54,7 @@ jobs:
         run: |
           mkdir -v -p build/macos
           EXPORT_DIR="$(readlink -f build)"
-          godot --headless --verbose --export-release "MacOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.zip"
+          godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.zip"
 
       - name: Add coi-service-worker
         run: |
