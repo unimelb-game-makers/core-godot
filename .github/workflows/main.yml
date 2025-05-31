@@ -192,19 +192,15 @@ jobs:
         name: ${{ env.PROJECT_NAME }}_macos
         path: build/macos
 
-    - uses: CyberAndrii/steam-totp@v1
-      name: Generate TOTP
-      id: steam-totp
-      with:
-        shared_secret: ${{ secrets.STEAM_SHARED_SECRET }}
-
+    # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
       with:
         username: ${{ secrets.STEAM_USERNAME }}          
-        totp: ${{ steps.steam-totp.outputs.code }}
+        configVdf: ${{ secrets.STEAM_CONFIG_VDF}}         
         appId: ${{ env.STEAM_APPID }}
         buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
         rootPath: build
         depot1Path: windows
+        # depot1InstallScriptPath: StandaloneWindows64/install_script.vdf
         depot2Path: macos
         releaseBranch: develop
