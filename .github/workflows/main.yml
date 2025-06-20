@@ -55,7 +55,7 @@ jobs:
         run: |
           mkdir -v -p build/macos
           EXPORT_DIR="$(readlink -f build)"
-          godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.zip"
+          godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.app"
 
       - name: Add coi-service-worker
         run: |
@@ -69,7 +69,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
           publish_branch: gh-pages
-          # force_orphan: true
+          force_orphan: true
           # NOTE: keeping files like this could be dangerous. Consider deleting stuff to save space if needed, depending on needs
           # e.g. Add an only-keep-last-10-version job
           keep_files: true
