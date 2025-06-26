@@ -47,8 +47,6 @@ jobs:
         run: |
           mkdir -v -p ~/.local/share/godot/export_templates
           mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-      - name: Create staging directory
-        run: mkdir -v -p build/web
         
       - name: Import assets
         run: |
@@ -57,8 +55,28 @@ jobs:
           # This should exit pretty much immediately.
           godot --import --headless
 
-      - name: Build
-        run: godot -v --export-release --headless "Web"
+      - name: Web Build
+        run: |
+          mkdir -v -p build/web
+          godot -v --export-release --headless "Web"
+
+      - name: Windows Build
+        run: |
+          mkdir -v -p build/windows
+          EXPORT_DIR="$(readlink -f build)"
+          godot --headless --verbose --export-release "Windows Desktop" "$EXPORT_DIR/windows/${{ env.PROJECT_NAME }}_windows.exe"
+
+      - name: Linux Build
+        run: |
+          mkdir -v -p build/linux
+          EXPORT_DIR="$(readlink -f build)"
+          godot --headless --verbose --export-release "Linux/X11" "$EXPORT_DIR/linux/${{ env.PROJECT_NAME }}_linux.x86_64"
+
+      - name: MacOS Build
+        run: |
+          mkdir -v -p build/macos
+          EXPORT_DIR="$(readlink -f build)"
+          godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.app"
 
       - name: Add coi-service-worker
         run: |

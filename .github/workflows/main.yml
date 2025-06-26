@@ -51,6 +51,12 @@ jobs:
           EXPORT_DIR="$(readlink -f build)"
           godot --headless --verbose --export-release "Windows Desktop" "$EXPORT_DIR/windows/${{ env.PROJECT_NAME }}_windows.exe"
 
+      - name: Linux Build
+        run: |
+          mkdir -v -p build/linux
+          EXPORT_DIR="$(readlink -f build)"
+          godot --headless --verbose --export-release "Linux/X11" "$EXPORT_DIR/linux/${{ env.PROJECT_NAME }}_linux.x86_64"
+
       - name: MacOS Build
         run: |
           mkdir -v -p build/macos
@@ -97,8 +103,14 @@ jobs:
         with:
           name: ${{ env.PROJECT_NAME }}_macos
           path: build/macos
+          
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}_linux
+          path: build/linux
 
-  Release:
+  Github-page-release:
     needs: [Builds]
     runs-on: ubuntu-latest
     permissions:
@@ -191,6 +203,12 @@ jobs:
       with:
         name: ${{ env.PROJECT_NAME }}_macos
         path: build/macos
+        
+    - name: Download Linux Build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.PROJECT_NAME }}_linux
+        path: build/linux
 
     # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
@@ -203,6 +221,7 @@ jobs:
         depot1Path: windows
         # depot1InstallScriptPath: StandaloneWindows64/install_script.vdf
         depot2Path: macos
+        depot3Path: linux
         # Might be too dangerous to immediately release the build onto some branch.
         # Steam-ci also doesn't support releasing to a branch protected by password for now it seems.
         # So for now, manually release the build to the correct branch on steamworks.
