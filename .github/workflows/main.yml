@@ -203,4 +203,7 @@ jobs:
         depot1Path: windows
         # depot1InstallScriptPath: StandaloneWindows64/install_script.vdf
         depot2Path: macos
-        releaseBranch: develop
+        # Might be too dangerous to immediately release the build onto some branch.
+        # Steam-ci also doesn't support releasing to a branch protected by password for now it seems.
+        # So for now, manually release the build to the correct branch on steamworks.
+        # releaseBranch: develop
