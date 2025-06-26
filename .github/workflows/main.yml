@@ -195,8 +195,8 @@ jobs:
     # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
       with:
-        username: ${{ secrets.TMP_STEAM_USERNAME }}          
-        configVdf: ${{ secrets.TMP_STEAM_CONFIG_VDF}}         
+        username: ${{ secrets.STEAM_USERNAME }}          
+        configVdf: ${{ secrets.STEAM_CONFIG_VDF}}         
         appId: ${{ env.STEAM_APPID }}
         buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
         rootPath: build
