@@ -213,7 +213,7 @@ jobs:
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
   
   Steam-deploy: # Push only - deploy for steam
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (${{ secrets.STEAM_APPID }} != '')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [Builds]
     runs-on: ubuntu-latest
     steps:
@@ -234,6 +234,22 @@ jobs:
       with:
         name: ${{ env.PROJECT_NAME }}_linux
         path: build/linux
+
+    - name: Check required secrets exist # Fail if secrets not defined
+      env: 
+        STEAM_APPID_LOCAL: ${{ secrets.STEAM_APPID }}
+        STEAM_USERNAME_LOCAL: ${{ secrets.STEAM_USERNAME }}
+        STEAM_CONFIG_VDF_LOCAL: ${{ secrets.STEAM_CONFIG_VDF }}
+      run: |
+        if [ -z "$STEAM_APPID_LOCAL" ]; then
+          exit 1
+        fi
+        if [ -z "$STEAM_USERNAME_LOCAL" ]; then
+          exit 1
+        fi
+        if [ -z "$STEAM_CONFIG_VDF_LOCAL" ]; then
+          exit 1
+        fi
 
     # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
