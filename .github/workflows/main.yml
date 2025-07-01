@@ -1,17 +1,24 @@
-# Secrets: ITCH_IO_API_KEY
-
-name: "Godot CI/CD on push to main"
+name: "Godot CI/CD"
 
 env:
   GODOT_VERSION: 4.4.1
   PROJECT_NAME: 'ci_example'
-  STEAM_APPID: 3711250
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - ready_for_review
+      - review_requested
+      - review_request_removed
+      - converted_to_draft
 
 jobs:
   Builds:
@@ -69,7 +76,8 @@ jobs:
           mv coi-serviceworker/coi-serviceworker.js build/web/coi-serviceworker.js
           sed -i '3 i <script src="coi-serviceworker.js"></script>' build/web/index.html
 
-      - name: 🚀 Deploy to `gh-pages` branch
+      - name: 🚀 Deploy to `gh-pages` branch # Push - deploy to main directory
+        if: github.event_name == 'push'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -82,6 +90,20 @@ jobs:
           user_name: "github-ci[bot]"
           user_email: "github-actions[bot]@users.noreply.github.com"
           commit_message: "Deploy main branch push to main directory"
+
+      - name: 🚀 Deploy to `gh-pages` branch # PR - deploy to subdirectory
+        if: github.event_name == 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web
+          publish_branch: gh-pages
+          force_orphan: true
+          keep_files: true
+          user_name: "github-ci[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "Deploy PR web deploy to subdirectory ${{ github.event.number }}"
+          destination_dir: ${{ github.event.number }}
 
       - name: Zip Web artifacts
         run: zip -r "${{ env.PROJECT_NAME }}_web.zip" build/web
@@ -110,7 +132,8 @@ jobs:
           name: ${{ env.PROJECT_NAME }}_linux
           path: build/linux
 
-  Github-page-release:
+  Github-page-release: # Push only - create github releases
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [Builds]
     runs-on: ubuntu-latest
     permissions:
@@ -166,7 +189,8 @@ jobs:
           asset_name: "${{ env.PROJECT_NAME }}_web.zip"
           asset_content_type: application/zip
 
-  Itch-deploy:
+  Itch-deploy: # Push only - create itch releases
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [Builds]
     runs-on: ubuntu-latest
     steps:
@@ -188,7 +212,8 @@ jobs:
         ITCH_USER: gmcunimelb
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
   
-  Steam-deploy:
+  Steam-deploy: # Push only - deploy for steam
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [Builds]
     runs-on: ubuntu-latest
     steps:
@@ -215,7 +240,7 @@ jobs:
       with:
         username: ${{ secrets.STEAM_USERNAME }}          
         configVdf: ${{ secrets.STEAM_CONFIG_VDF}}         
-        appId: ${{ env.STEAM_APPID }}
+        appId: ${{ secrets.STEAM_APPID }}
         buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
         rootPath: build
         depot1Path: windows
@@ -226,3 +251,25 @@ jobs:
         # Steam-ci also doesn't support releasing to a branch protected by password for now it seems.
         # So for now, manually release the build to the correct branch on steamworks.
         # releaseBranch: develop
+         
+  PR-comment-update: # PR only - comment preview link
+    if: github.event_name == 'pull_request'
+    needs: [Builds]
+    runs-on: ubuntu-latest
+    permissions: 
+      pull-requests: write
+    steps:
+      - name: Set preview URL message
+        id: set-message
+        run: |
+          if [[ "${{ needs.Web.result }}" == "success" ]]; then
+            echo "message=🌐 [Web Preview](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.event.pull_request.number }}/)" >> $GITHUB_OUTPUT
+          else
+            echo "message=❌ Deployment failed for this PR." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment deploy preview URL
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          message: ${{ steps.set-message.outputs.message }}
+          comment-tag: execution
