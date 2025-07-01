@@ -213,7 +213,7 @@ jobs:
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
   
   Steam-deploy: # Push only - deploy for steam
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (secrets.STEAM_APPID != '')
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (${{ secrets.STEAM_APPID }} != '')
     needs: [Builds]
     runs-on: ubuntu-latest
     steps:
