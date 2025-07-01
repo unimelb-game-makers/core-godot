@@ -270,6 +270,7 @@ jobs:
          
   PR-comment-update: # PR only - comment preview link
     if: github.event_name == 'pull_request'
+    needs: [Builds]
     runs-on: ubuntu-latest
     permissions: 
       pull-requests: write
