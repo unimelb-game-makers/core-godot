@@ -270,7 +270,6 @@ jobs:
          
   PR-comment-update: # PR only - comment preview link
     if: github.event_name == 'pull_request'
-    needs: [Builds]
     runs-on: ubuntu-latest
     permissions: 
       pull-requests: write
@@ -278,7 +277,7 @@ jobs:
       - name: Set preview URL message
         id: set-message
         run: |
-          if [[ "${{ needs.Web.result }}" == "success" ]]; then
+          if [[ "${{ needs.Builds.result }}" == "success" ]]; then
             echo "message=🌐 [Web Preview](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.event.pull_request.number }}/)" >> $GITHUB_OUTPUT
           else
             echo "message=❌ Deployment failed for this PR." >> $GITHUB_OUTPUT
