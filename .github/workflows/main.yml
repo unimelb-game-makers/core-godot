@@ -180,10 +180,35 @@ jobs:
           asset_path: ${{ env.PROJECT_NAME }}_web.zip
           asset_name: "${{ env.PROJECT_NAME }}_web.zip"
           asset_content_type: application/zip
-
+  Check-Secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      has_steam: ${{ steps.check.outputs.has_steam }}
+      has_itch: ${{ steps.check.outputs.has_itch }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          # Check Steam
+          if [ -z "${{ secrets.STEAM_CONFIG_VDF }}" ]; then
+            echo "has_steam=false" >> $GITHUB_OUTPUT
+          elif [ -z "${{ secrets.STEAM_USERNAME }}" ]; then
+            echo "has_steam=false" >> $GITHUB_OUTPUT
+          elif [ -z "${{ secrets.STEAM_APPID }}" ]; then
+            echo "has_steam=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_steam=true" >> $GITHUB_OUTPUT
+          fi
+          # Check Itch
+          if [ -z "${{ secrets.ITCH_IO_API_KEY }}" ]; then
+            echo "has_itch=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_itch=true" >> $GITHUB_OUTPUT
+          fi          
+          
   Itch-deploy: # Push only - create itch releases
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: [Builds]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.Check-Secrets.outputs.has_itch == 'true'
+    needs: [Builds, Check-Secrets]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -203,10 +228,9 @@ jobs:
         ITCH_GAME: ${{ env.PROJECT_NAME }}
         ITCH_USER: gmcunimelb
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
-  
   Steam-deploy: # Push only - deploy for steam
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    needs: [Builds]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.Check-Secrets.outputs.has_steam == 'true'
+    needs: [Builds, Check-Secrets]
     runs-on: ubuntu-latest
     steps:
     - name: Download Windows Build artifacts
@@ -226,22 +250,6 @@ jobs:
       with:
         name: ${{ env.PROJECT_NAME }}_linux
         path: build/linux
-
-    - name: Check required secrets exist # Fail if secrets not defined
-      env: 
-        STEAM_APPID_LOCAL: ${{ secrets.STEAM_APPID }}
-        STEAM_USERNAME_LOCAL: ${{ secrets.STEAM_USERNAME }}
-        STEAM_CONFIG_VDF_LOCAL: ${{ secrets.STEAM_CONFIG_VDF }}
-      run: |
-        if [ -z "$STEAM_APPID_LOCAL" ]; then
-          exit 1
-        fi
-        if [ -z "$STEAM_USERNAME_LOCAL" ]; then
-          exit 1
-        fi
-        if [ -z "$STEAM_CONFIG_VDF_LOCAL" ]; then
-          exit 1
-        fi
 
     # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
