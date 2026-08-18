@@ -3,27 +3,33 @@
 name: "Clean the gh-pages branch to save storage space"
 
 on:
-  workflow_dispatch
+  pull_request_target:
+    types: [closed]
+
+
+
 
 jobs:
-  Clean:
+  clean-preview:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
     steps:
-      - name: Clean branch files
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 1
+
+      - name: Remove closed PR preview
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git config --global user.name "github-ci[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git clone --depth=1 --branch=gh-pages https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} gh-pages
-          cd gh-pages
+          set -euo pipefail
 
-          # Remove all subdirectories (excluding .git and root files)
-          for dir in */ ; do
-            rm -rf "$dir"
-            echo "Deleted $dir"
-          done
+          git config user.name "github-ci[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
-          git commit -m "Clean all previous versions" || echo "Nothing to commit"
-          git push
+          git rm -r -- "$PR_NUMBER"
+          git commit -m "Remove preview for closed PR #$PR_NUMBER"
+          git push origin HEAD:gh-pages
