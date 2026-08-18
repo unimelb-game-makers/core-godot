@@ -127,11 +127,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ${{ env.PROJECT_PATH }}/build/web
           publish_branch: gh-pages
-          # NOTE: keeping files like this could be dangerous. Consider deleting stuff to save space if needed, depending on needs
-          # e.g. Add an only-keep-last-10-version job
-          keep_files: true
+          keep_files: false
           user_name: "github-ci[bot]"
           user_email: "github-actions[bot]@users.noreply.github.com"
+          destination_dir: main
           commit_message: "Deploy main branch push to main directory"
 
       - name: 🚀 Deploy to `gh-pages` branch # PR - deploy to subdirectory
@@ -141,12 +140,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ${{ env.PROJECT_PATH }}/build/web
           publish_branch: gh-pages
-          keep_files: true
+          keep_files: false
           user_name: "github-ci[bot]"
           user_email: "github-actions[bot]@users.noreply.github.com"
           commit_message: "Deploy PR web deploy to subdirectory ${{ github.event.number }}"
-          destination_dir: ${{ github.event.number }}
-
+          destination_dir: previews/${{ github.event.pull_request.number }}
+            
       - name: Upload ${{ matrix.platform }} artifact
         uses: actions/upload-artifact@v4
         with:
