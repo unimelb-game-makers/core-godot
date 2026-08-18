@@ -108,8 +108,7 @@ jobs:
     needs: build
     if: >-
       vars.ITCH_USERNAME != '' &&
-      vars.ITCH_GAMENAME != '' &&
-      vars.ITCH_BUTLER_URL != ''
+      vars.ITCH_GAMENAME != ''
     runs-on: ubuntu-latest
     environment: itch-production
     concurrency:
@@ -124,7 +123,7 @@ jobs:
       - name: Install Butler
         shell: bash
         env:
-          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL || 'https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default'}}
         run: |
           curl -fsSL "$ITCH_BUTLER_URL" -o butler.zip
           unzip -q butler.zip
