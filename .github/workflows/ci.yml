@@ -11,33 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  configure:
-    name: Validate build configuration
-    runs-on: ubuntu-latest
-    outputs:
-      platforms: ${{ steps.platforms.outputs.platforms }}
-      desktop_platforms: ${{ steps.platforms.outputs.desktop_platforms }}
-      web_enabled: ${{ steps.platforms.outputs.web_enabled }}
-      has_desktop: ${{ steps.platforms.outputs.has_desktop }}
-    steps:
-      - name: Checkout configuration
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Resolve build platforms
-        id: platforms
-        shell: bash
-        env:
-          BUILD_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
-          ENABLE_ITCH: ${{ vars.ENABLE_ITCH }}
-          ENABLE_STEAM: ${{ vars.ENABLE_STEAM }}
-        run: bash .github/scripts/resolve-build-platforms.sh
-
   build-web:
     name: Build web
-    needs: configure
-    if: needs.configure.outputs.web_enabled == 'true'
+    if: contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     permissions:
       contents: read
     uses: ./.github/workflows/_godot-build.yml
@@ -49,12 +25,16 @@ jobs:
 
   build-desktop:
     name: Build ${{ matrix.platform }}
-    needs: configure
-    if: needs.configure.outputs.has_desktop == 'true'
+    if: >-
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(needs.configure.outputs.desktop_platforms) }}
+        platform: ${{ fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]') }}
+        exclude:
+          - platform: web
     permissions:
       contents: read
     uses: ./.github/workflows/_godot-build.yml
@@ -66,12 +46,12 @@ jobs:
 
   publish-preview:
     name: Publish PR preview
-    needs: [configure, build-web]
+    needs: build-web
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.configure.outputs.web_enabled == 'true'
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -99,10 +79,10 @@ jobs:
 
   publish-main-pages:
     name: Publish main Pages build
-    needs: [configure, build-web]
+    needs: build-web
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      needs.configure.outputs.web_enabled == 'true'
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -130,14 +110,13 @@ jobs:
 
   comment-preview:
     name: Comment preview result
-    needs: [configure, publish-preview]
+    needs: publish-preview
     if: >-
       always() &&
-      needs.configure.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.configure.outputs.web_enabled == 'true'
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

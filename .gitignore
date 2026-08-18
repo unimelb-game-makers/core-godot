@@ -15,6 +15,4 @@ export.cfg
 data_*/
 mono_crash.*.json
 
-.github/ci-variables.env
-.github/itch-production-variables.env
-.github/steam-production-variables.env
+.github/ci-cd.env

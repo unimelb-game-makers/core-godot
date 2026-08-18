@@ -9,32 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  configure:
-    name: Validate release configuration
-    runs-on: ubuntu-latest
-    outputs:
-      platforms: ${{ steps.platforms.outputs.platforms }}
-      desktop_platforms: ${{ steps.platforms.outputs.desktop_platforms }}
-      web_enabled: ${{ steps.platforms.outputs.web_enabled }}
-      has_desktop: ${{ steps.platforms.outputs.has_desktop }}
-    steps:
-      - name: Checkout configuration
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Resolve build platforms
-        id: platforms
-        shell: bash
-        env:
-          BUILD_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
-          ENABLE_ITCH: ${{ vars.ENABLE_ITCH }}
-          ENABLE_STEAM: ${{ vars.ENABLE_STEAM }}
-        run: bash .github/scripts/resolve-build-platforms.sh
-
   version:
     name: Calculate release version
-    needs: configure
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -73,8 +49,7 @@ jobs:
 
   build-web:
     name: Build web release
-    needs: configure
-    if: needs.configure.outputs.web_enabled == 'true'
+    if: contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     permissions:
       contents: read
     uses: ./.github/workflows/_godot-build.yml
@@ -86,12 +61,16 @@ jobs:
 
   build-desktop:
     name: Build ${{ matrix.platform }} release
-    needs: configure
-    if: needs.configure.outputs.has_desktop == 'true'
+    if: >-
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(needs.configure.outputs.desktop_platforms) }}
+        platform: ${{ fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]') }}
+        exclude:
+          - platform: web
     permissions:
       contents: read
     uses: ./.github/workflows/_godot-build.yml
@@ -103,13 +82,22 @@ jobs:
 
   github-release:
     name: Publish GitHub prerelease
-    needs: [configure, version, build-web, build-desktop]
+    needs: [version, build-web, build-desktop]
     if: >-
       always() &&
-      needs.configure.result == 'success' &&
       needs.version.result == 'success' &&
-      (needs.configure.outputs.web_enabled != 'true' || needs.build-web.result == 'success') &&
-      (needs.configure.outputs.has_desktop != 'true' || needs.build-desktop.result == 'success')
+      (
+        needs.build-web.result == 'success' ||
+        needs.build-web.result == 'skipped'
+      ) &&
+      (
+        needs.build-desktop.result == 'success' ||
+        needs.build-desktop.result == 'skipped'
+      ) &&
+      (
+        needs.build-web.result == 'success' ||
+        needs.build-desktop.result == 'success'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -118,7 +106,7 @@ jobs:
       queue: max
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
       - name: Download selected build artifacts
         uses: actions/download-artifact@v8
@@ -181,14 +169,23 @@ jobs:
 
   deploy-itch:
     name: Deploy selected builds to itch.io
-    needs: [configure, version, build-web, build-desktop]
+    needs: [version, build-web, build-desktop]
     if: >-
       always() &&
       vars.ENABLE_ITCH == 'true' &&
-      needs.configure.result == 'success' &&
       needs.version.result == 'success' &&
-      (needs.configure.outputs.web_enabled != 'true' || needs.build-web.result == 'success') &&
-      (needs.configure.outputs.has_desktop != 'true' || needs.build-desktop.result == 'success')
+      (
+        needs.build-web.result == 'success' ||
+        needs.build-web.result == 'skipped'
+      ) &&
+      (
+        needs.build-desktop.result == 'success' ||
+        needs.build-desktop.result == 'skipped'
+      ) &&
+      (
+        needs.build-web.result == 'success' ||
+        needs.build-desktop.result == 'success'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -198,7 +195,7 @@ jobs:
       queue: max
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
       - name: Download selected build artifacts
         uses: actions/download-artifact@v8
@@ -260,13 +257,16 @@ jobs:
 
   deploy-steam:
     name: Deploy desktop builds to Steam
-    needs: [configure, version, build-desktop]
+    needs: [version, build-desktop]
     if: >-
       always() &&
       vars.ENABLE_STEAM == 'true' &&
-      needs.configure.result == 'success' &&
       needs.version.result == 'success' &&
-      needs.configure.outputs.has_desktop == 'true' &&
+      (
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
+      ) &&
       needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -277,7 +277,7 @@ jobs:
       queue: max
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
       - name: Validate Steam configuration
         shell: bash
@@ -295,21 +295,21 @@ jobs:
           fi
 
       - name: Download Windows artifact
-        if: contains(fromJSON(needs.configure.outputs.platforms), 'windows')
+        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'windows')
         uses: actions/download-artifact@v8
         with:
           name: windows
           path: build/windows
 
       - name: Download Linux artifact
-        if: contains(fromJSON(needs.configure.outputs.platforms), 'linux')
+        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'linux')
         uses: actions/download-artifact@v8
         with:
           name: linux
           path: build/linux
 
       - name: Download macOS artifact
-        if: contains(fromJSON(needs.configure.outputs.platforms), 'macos')
+        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'macos')
         uses: actions/download-artifact@v8
         with:
           name: macos
