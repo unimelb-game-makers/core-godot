@@ -1,0 +1,246 @@
+name: Godot release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Calculate release version
+    runs-on: ubuntu-latest
+    outputs:
+      full_semver: ${{ steps.gitversion.outputs.fullSemVer }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v4.7.0
+        with:
+          versionSpec: 6.8.x
+
+      - name: Calculate GitVersion
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.7.0
+        with:
+          useConfigFile: true
+          configFilePath: GitVersion.yml
+
+  build:
+    name: Build ${{ matrix.platform }} release
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]') }}
+    uses: ./.github/workflows/_godot-build.yml
+    with:
+      platform: ${{ matrix.platform }}
+      godot_version: ${{ vars.GODOT_VERSION || '4.7.1' }}
+      project_name: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      project_path: ${{ vars.PROJECT_PATH || '.' }}
+
+  github-release:
+    name: Publish GitHub prerelease
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: github-release-${{ needs.version.outputs.full_semver }}
+      queue: max
+    env:
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+
+          for source_dir in artifacts/*; do
+            platform="${source_dir##*/}"
+            archive_path="${GITHUB_WORKSPACE}/release-assets/${PROJECT_NAME}_${platform}.zip"
+
+            if [[ "$platform" == 'macos' ]]; then
+              cp "${source_dir}/${PROJECT_NAME}_macos.zip" "$archive_path"
+              continue
+            fi
+
+            if [[ "$platform" == 'linux' ]]; then
+              chmod +x "${source_dir}/${PROJECT_NAME}_linux.x86_64"
+            fi
+
+            (cd "$source_dir" && zip -q -r "$archive_path" .)
+          done
+
+      - name: Create or update GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.version.outputs.full_semver }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --target "$TARGET_SHA" \
+              --title "$TAG_NAME" \
+              --notes "Automated prerelease for ${TAG_NAME}." \
+              --prerelease
+          fi
+
+          gh release upload "$TAG_NAME" release-assets/*.zip --clobber
+
+  deploy-itch:
+    name: Deploy builds to itch.io
+    needs: build
+    runs-on: ubuntu-latest
+    environment: itch-production
+    concurrency:
+      group: itch-production
+      queue: max
+    steps:
+      - name: Detect itch.io configuration
+        id: detect
+        shell: bash
+        env:
+          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          if [[ -n "$ITCH_USERNAME" &&
+                -n "$ITCH_GAMENAME" &&
+                -n "$ITCH_BUTLER_URL" &&
+                -n "$BUTLER_API_KEY" ]]; then
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo 'Skipping itch.io deployment because its configuration is incomplete.'
+          fi
+
+      - name: Download build artifacts
+        if: steps.detect.outputs.configured == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          path: build
+
+      - name: Install Butler
+        if: steps.detect.outputs.configured == 'true'
+        shell: bash
+        env:
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+        run: |
+          curl -fsSL "$ITCH_BUTLER_URL" -o butler.zip
+          unzip -q butler.zip
+          chmod +x butler
+
+      - name: Upload channels
+        if: steps.detect.outputs.configured == 'true'
+        shell: bash
+        env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          for folder in build/*; do
+            platform="${folder##*/}"
+
+            case "$platform" in
+              web) channel='html5' ;;
+              windows) channel='windows' ;;
+              linux)
+                channel='linux'
+                chmod +x "${folder}/${PROJECT_NAME}_linux.x86_64"
+                ;;
+              macos) channel='macos' ;;
+              *) continue ;;
+            esac
+
+            ./butler push "$folder" "${ITCH_USERNAME}/${ITCH_GAMENAME}:${channel}"
+          done
+
+  deploy-steam:
+    name: Deploy desktop builds to Steam
+    needs: [version, build]
+    if: >-
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
+    runs-on: ubuntu-latest
+    environment: steam-production
+    concurrency:
+      group: steam-production
+      queue: max
+    env:
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+    steps:
+      - name: Detect Steam configuration
+        id: detect
+        shell: bash
+        env:
+          STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+        run: |
+          if [[ -n "$STEAM_USERNAME" &&
+                -n "$STEAM_CONFIG_VDF" &&
+                "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo 'Skipping Steam deployment because its configuration is incomplete.'
+          fi
+
+      - name: Download build artifacts
+        if: steps.detect.outputs.configured == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          path: build
+
+      - name: Prepare Steam depots
+        if: steps.detect.outputs.configured == 'true'
+        id: depots
+        shell: bash
+        run: |
+          if [[ -d build/windows ]]; then
+            echo 'depot1=windows' >>"$GITHUB_OUTPUT"
+          fi
+
+          if [[ -d build/linux ]]; then
+            chmod +x "build/linux/${PROJECT_NAME}_linux.x86_64"
+            echo 'depot2=linux' >>"$GITHUB_OUTPUT"
+          fi
+
+          if [[ -d build/macos ]]; then
+            archive="build/macos/${PROJECT_NAME}_macos.zip"
+            unzip -q "$archive" -d build/macos
+            rm "$archive"
+            echo 'depot3=macos' >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Steam depots
+        if: steps.detect.outputs.configured == 'true'
+        uses: game-ci/steam-deploy@v3
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          appId: ${{ vars.STEAM_APP_ID }}
+          buildDescription: ${{ needs.version.outputs.full_semver }}
+          rootPath: build
+          depot1Path: ${{ steps.depots.outputs.depot1 }}
+          depot2Path: ${{ steps.depots.outputs.depot2 }}
+          depot3Path: ${{ steps.depots.outputs.depot3 }}

@@ -1,0 +1,132 @@
+name: Reusable Godot build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Export platform (web, windows, linux, or macos)
+        required: true
+        type: string
+      godot_version:
+        description: Godot editor and export-template version
+        required: false
+        default: "4.7.1"
+        type: string
+      project_name:
+        description: Base filename for exported builds
+        required: false
+        default: ci_example
+        type: string
+      project_path:
+        description: Directory containing project.godot
+        required: false
+        default: .
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.platform }}
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:${{ inputs.godot_version }}
+    env:
+      PROJECT_NAME: ${{ inputs.project_name }}
+      PROJECT_PATH: ${{ inputs.project_path }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+
+      - name: Validate build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.platform }}" in
+            web|windows|linux|macos) ;;
+            *)
+              echo "Unsupported platform: ${{ inputs.platform }}" >&2
+              exit 1
+              ;;
+          esac
+
+          test -f "$PROJECT_PATH/project.godot"
+          if [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == */* ]]; then
+            echo 'project_name must be a non-empty filename without path separators.' >&2
+            exit 1
+          fi
+
+      - name: Install bundled export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination_dir="$HOME/.local/share/godot/export_templates"
+          shopt -s nullglob
+          source_dirs=(/root/.local/share/godot/export_templates/*.stable)
+
+          if [[ "${#source_dirs[@]}" -eq 0 ]]; then
+            echo 'The Godot CI container does not contain export templates.' >&2
+            exit 1
+          fi
+
+          mkdir -v -p "$destination_dir"
+          cp -a "${source_dirs[@]}" "$destination_dir/"
+
+      - name: Import assets
+        working-directory: ${{ inputs.project_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot --headless --editor --quit-after 2
+          godot --import --headless
+          godot --import --headless
+
+      - name: Export ${{ inputs.platform }}
+        working-directory: ${{ inputs.project_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.platform }}" in
+            web)
+              preset='Web'
+              output='build/web/index.html'
+              ;;
+            windows)
+              preset='Windows Desktop'
+              output="build/windows/${PROJECT_NAME}_windows.exe"
+              ;;
+            linux)
+              preset='Linux/X11'
+              output="build/linux/${PROJECT_NAME}_linux.x86_64"
+              ;;
+            macos)
+              preset='macOS'
+              output="build/macos/${PROJECT_NAME}_macos.zip"
+              ;;
+          esac
+
+          mkdir -v -p "build/${{ inputs.platform }}"
+          godot --headless --verbose --export-release "$preset" "$output"
+          test -s "$output"
+
+      - name: Add cross-origin isolation service worker
+        if: inputs.platform == 'web'
+        working-directory: ${{ inputs.project_path }}
+        run: |
+          git clone --depth 1 https://github.com/gzuidhof/coi-serviceworker.git
+          mv coi-serviceworker/coi-serviceworker.js build/web/
+          sed -i 's#</head>#<script src="coi-serviceworker.js"></script>\n</head>#' build/web/index.html
+
+
+
+      - name: Upload ${{ inputs.platform }} artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.platform }}
+          path: ${{ inputs.project_path }}/build/${{ inputs.platform }}
+          if-no-files-found: error

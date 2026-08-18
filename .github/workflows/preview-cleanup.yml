@@ -1,0 +1,41 @@
+name: Clean closed PR preview
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup-preview:
+    name: Remove preview directory
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: gh-pages-write
+      queue: max
+    steps:
+      - name: Checkout trusted base repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Remove closed PR preview
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          git fetch --depth=1 origin gh-pages
+          git switch --detach FETCH_HEAD
+
+          preview_dir="previews/${PR_NUMBER}"
+
+          git config user.name "github-ci[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git rm -r -- "$preview_dir"
+          git commit -m "Remove preview for closed PR #${PR_NUMBER}"
+          git push origin HEAD:gh-pages
