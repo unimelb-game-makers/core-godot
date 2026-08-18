@@ -17,8 +17,9 @@ name: "Godot CI/CD"
 #
 # GITHUB_TOKEN, GITHUB_REF, and the `github.*` context values are supplied
 # automatically by GitHub Actions and do not need to be created manually.
+
 env:
-  GODOT_VERSION: ${{ vars.GODOT_VERSION || '4.4.1' }}
+  GODOT_VERSION: ${{ vars.GODOT_VERSION || '4.7.1' }}
   PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
   PROJECT_PATH: ${{ vars.PROJECT_PATH || '.' }}
   ITCH_USERNAME: ${{ vars.ITCH_USERNAME || 'stego-studio' }}
@@ -30,7 +31,7 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, edited, synchronize, reopened] 
+    types: [opened, synchronize, reopened, ready_for_review]    
     
 concurrency:
   group: gh-pages-write
@@ -48,10 +49,10 @@ jobs:
     permissions:
       contents: write
     container:
-      image: barichello/godot-ci:${{ vars.GODOT_VERSION || '4.4.1' }}
+      image: barichello/godot-ci:${{ vars.GODOT_VERSION || '4.7.1' }}
     steps:
       - name: Checkout with Git LFS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Fetch all history for .GitInfo and .Lastmod
           lfs: true
@@ -119,9 +120,18 @@ jobs:
           git clone https://github.com/gzuidhof/coi-serviceworker.git
           mv coi-serviceworker/coi-serviceworker.js build/web/coi-serviceworker.js
           sed -i '3 i <script src="coi-serviceworker.js"></script>' build/web/index.html
+          
+      - name: Upload ${{ matrix.platform }} artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ env.PROJECT_PATH }}/build/${{ matrix.platform }}
+          if-no-files-found: error
 
       - name: 🚀 Deploy to `gh-pages` branch # Push - deploy to main directory
-        if: matrix.platform == 'web' && github.event_name == 'push'
+        if: >-
+          matrix.platform == 'web' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -146,75 +156,85 @@ jobs:
           commit_message: "Deploy PR web deploy to subdirectory ${{ github.event.number }}"
           destination_dir: previews/${{ github.event.pull_request.number }}
             
-      - name: Upload ${{ matrix.platform }} artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}
-          path: ${{ env.PROJECT_PATH }}/build/${{ matrix.platform }}
-          if-no-files-found: error
-
-  Github-page-release: # Push only - create github releases
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
+  Github-page-release:
+    name: Create or update web prerelease
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      contains(
+        fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'),
+        'web'
+      )
     needs: [Builds]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     permissions:
       contents: write
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           lfs: true
 
-      - name: Set up GitVersion
-        uses: gittools/actions/gitversion/setup@v0.9.15
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v4.7.0
         with:
-          versionSpec: '5.x'
+          versionSpec: "6.8.x"
 
-      - name: Execute GitVersion
-        uses: gittools/actions/gitversion/execute@v0.9.15
+      - name: Calculate version
+        uses: gittools/actions/gitversion/execute@v4.7.0
         with:
           useConfigFile: true
           configFilePath: GitVersion.yml
 
-      - name: Get branch name
-        id: get_branch
-        run: echo "BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_ENV
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: Download web artifact
+        uses: actions/download-artifact@v8
         with:
           name: web
           path: artifacts/web
 
-      - name: Package Web release
+      - name: Package web release
+        shell: bash
+        env:
+          ARCHIVE: ${{ env.PROJECT_NAME }}_web.zip
         run: |
-          cd artifacts/web
-          zip -q -r "../../${{ env.PROJECT_NAME }}_web.zip" .
+          set -euo pipefail
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{env.GitVersion_FullSemVer}}
-          release_name: ${{env.GitVersion_FullSemVer}}
-          body: |
-            Release notes for ${{env.GitVersion_FullSemVer}}
-          draft: false
-          prerelease: true
+          (
+            cd artifacts/web
+            zip -q -r "../../${ARCHIVE}" .
+          )
 
-      - name: Upload Web Release Asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
+          test -s "${ARCHIVE}"
+
+      - name: Create or update GitHub prerelease
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.PROJECT_NAME }}_web.zip
-          asset_name: "${{ env.PROJECT_NAME }}_web.zip"
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ env.GitVersion_FullSemVer }}
+          ASSET_PATH: ${{ env.PROJECT_NAME }}_web.zip
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TAG_NAME}" ]]; then
+            echo "GitVersion did not produce GitVersion_FullSemVer." >&2
+            exit 1
+          fi
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; replacing its web asset."
+          else
+            gh release create "${TAG_NAME}" \
+              --target "${GITHUB_SHA}" \
+              --title "${TAG_NAME}" \
+              --notes "Automated web prerelease for ${TAG_NAME}." \
+              --prerelease
+          fi
+
+          gh release upload "${TAG_NAME}" "${ASSET_PATH}" --clobber
+          
   Deploy:
     name: Deploy selected builds
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -222,7 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all selected builds
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: build
 
@@ -329,7 +349,10 @@ jobs:
           depot3Path: ${{ env.MACOS_DEPOT }}
          
   PR-comment-update: # PR only - comment preview link
-    if: github.event_name == 'pull_request' && contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     needs: [Builds]
     runs-on: ubuntu-latest
     permissions: 
@@ -339,7 +362,7 @@ jobs:
         id: set-message
         run: |
           if [[ "${{ needs.Builds.result }}" == "success" ]]; then
-            echo "message=🌐 [Web Preview](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.event.pull_request.number }}/)" >> $GITHUB_OUTPUT
+            echo "message=🌐 [Web Preview](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/${{ github.event.pull_request.number }}/)" >> "$GITHUB_OUTPUT"
           else
             echo "message=❌ Deployment failed for this PR." >> $GITHUB_OUTPUT
           fi
