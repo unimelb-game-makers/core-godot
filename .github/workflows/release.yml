@@ -106,39 +106,22 @@ jobs:
   deploy-itch:
     name: Deploy builds to itch.io
     needs: build
+    if: >-
+      vars.ITCH_USERNAME != '' &&
+      vars.ITCH_GAMENAME != '' &&
+      vars.ITCH_BUTLER_URL != ''
     runs-on: ubuntu-latest
     environment: itch-production
     concurrency:
       group: itch-production
       queue: max
     steps:
-      - name: Detect itch.io configuration
-        id: detect
-        shell: bash
-        env:
-          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
-          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
-          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
-          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
-        run: |
-          if [[ -n "$ITCH_USERNAME" &&
-                -n "$ITCH_GAMENAME" &&
-                -n "$ITCH_BUTLER_URL" &&
-                -n "$BUTLER_API_KEY" ]]; then
-            echo 'configured=true' >>"$GITHUB_OUTPUT"
-          else
-            echo 'configured=false' >>"$GITHUB_OUTPUT"
-            echo 'Skipping itch.io deployment because its configuration is incomplete.'
-          fi
-
       - name: Download build artifacts
-        if: steps.detect.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           path: build
 
       - name: Install Butler
-        if: steps.detect.outputs.configured == 'true'
         shell: bash
         env:
           ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
@@ -148,7 +131,6 @@ jobs:
           chmod +x butler
 
       - name: Upload channels
-        if: steps.detect.outputs.configured == 'true'
         shell: bash
         env:
           PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
@@ -156,6 +138,8 @@ jobs:
           ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
           BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
         run: |
+          : "${BUTLER_API_KEY:?ITCH_IO_API_KEY is not configured}"
+
           for folder in build/*; do
             platform="${folder##*/}"
 
@@ -177,9 +161,12 @@ jobs:
     name: Deploy desktop builds to Steam
     needs: [version, build]
     if: >-
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
+      vars.STEAM_APP_ID != '' &&
+      (
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
+      )
     runs-on: ubuntu-latest
     environment: steam-production
     concurrency:
@@ -188,31 +175,12 @@ jobs:
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
     steps:
-      - name: Detect Steam configuration
-        id: detect
-        shell: bash
-        env:
-          STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
-          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
-        run: |
-          if [[ -n "$STEAM_USERNAME" &&
-                -n "$STEAM_CONFIG_VDF" &&
-                "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
-            echo 'configured=true' >>"$GITHUB_OUTPUT"
-          else
-            echo 'configured=false' >>"$GITHUB_OUTPUT"
-            echo 'Skipping Steam deployment because its configuration is incomplete.'
-          fi
-
       - name: Download build artifacts
-        if: steps.detect.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           path: build
 
       - name: Prepare Steam depots
-        if: steps.detect.outputs.configured == 'true'
         id: depots
         shell: bash
         run: |
@@ -233,7 +201,6 @@ jobs:
           fi
 
       - name: Upload Steam depots
-        if: steps.detect.outputs.configured == 'true'
         uses: game-ci/steam-deploy@v3
         with:
           username: ${{ secrets.STEAM_USERNAME }}
