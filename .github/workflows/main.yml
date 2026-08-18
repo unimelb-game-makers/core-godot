@@ -7,10 +7,13 @@ name: "Godot CI/CD"
 #   Use '.' when the project is stored at the repository root.
 # - ITCH_USERNAME: Account/subdomain name from username.itch.io.
 # - ITCH_GAMENAME: URL slug from username.itch.io/game-name.
+# - BUILD_PLATFORMS: JSON array of platforms to build in parallel.
+# - STEAM_APP_ID: Steam application ID.
+# - ITCH_BUTLER_URL: Butler download URL.
 #
 # Add these GitHub Actions secrets only for the deployment targets you use:
 # - Itch.io: ITCH_IO_API_KEY
-# - Steam: STEAM_CONFIG_VDF, STEAM_USERNAME, and STEAM_APPID
+# - Steam: STEAM_CONFIG_VDF and STEAM_USERNAME
 #
 # GITHUB_TOKEN, GITHUB_REF, and the `github.*` context values are supplied
 # automatically by GitHub Actions and do not need to be created manually.
@@ -20,6 +23,7 @@ env:
   PROJECT_PATH: ${{ vars.PROJECT_PATH || '.' }}
   ITCH_USERNAME: ${{ vars.ITCH_USERNAME || 'stego-studio' }}
   ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME || 'ci-example' }}
+  ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL || 'https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default' }}
 on:
   workflow_dispatch:
   push:
@@ -30,11 +34,17 @@ on:
 
 jobs:
   Builds:
+    name: Build ${{ matrix.platform }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        platform: ${{ fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]') }}
     permissions:
       contents: write
     container:
-      image: barichello/godot-ci:4.4.1
+      image: barichello/godot-ci:${{ vars.GODOT_VERSION || '4.4.1' }}
     steps:
       - name: Checkout with Git LFS
         uses: actions/checkout@v4
@@ -42,10 +52,21 @@ jobs:
           fetch-depth: 0 # Fetch all history for .GitInfo and .Lastmod
           lfs: true
 
-      - name: Move export templates into position
+      - name: Install bundled export templates
+        shell: bash
         run: |
-          mkdir -v -p ~/.local/share/godot/export_templates
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          set -euo pipefail
+          destination_dir="$HOME/.local/share/godot/export_templates"
+          shopt -s nullglob
+          source_dirs=(/root/.local/share/godot/export_templates/*.stable)
+
+          if [[ "${#source_dirs[@]}" -eq 0 ]]; then
+            echo "The Godot CI container does not contain export templates." >&2
+            exit 1
+          fi
+
+          mkdir -v -p "$destination_dir"
+          cp -a "${source_dirs[@]}" "$destination_dir/"
 
       - name: Import assets
         working-directory: ${{ env.PROJECT_PATH }}
@@ -56,34 +77,39 @@ jobs:
           # This should exit pretty much immediately.
           godot --import --headless
 
-      - name: Web Build
+      - name: Build ${{ matrix.platform }} export
         working-directory: ${{ env.PROJECT_PATH }}
+        shell: bash
         run: |
-          mkdir -v -p build/web
-          godot -v --export-release --headless "Web"
+          set -euo pipefail
+          case "${{ matrix.platform }}" in
+            web)
+              preset='Web'
+              output='build/web/index.html'
+              ;;
+            windows)
+              preset='Windows Desktop'
+              output='build/windows/${{ env.PROJECT_NAME }}_windows.exe'
+              ;;
+            linux)
+              preset='Linux/X11'
+              output='build/linux/${{ env.PROJECT_NAME }}_linux.x86_64'
+              ;;
+            macos)
+              preset='macOS'
+              output='build/macos/${{ env.PROJECT_NAME }}_macos.zip'
+              ;;
+            *)
+              echo 'Unsupported platform: ${{ matrix.platform }}' >&2
+              exit 1
+              ;;
+          esac
 
-      - name: Windows Build
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          mkdir -v -p build/windows
-          EXPORT_DIR="$(readlink -f build)"
-          godot --headless --verbose --export-release "Windows Desktop" "$EXPORT_DIR/windows/${{ env.PROJECT_NAME }}_windows.exe"
-
-      - name: Linux Build
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          mkdir -v -p build/linux
-          EXPORT_DIR="$(readlink -f build)"
-          godot --headless --verbose --export-release "Linux/X11" "$EXPORT_DIR/linux/${{ env.PROJECT_NAME }}_linux.x86_64"
-
-      - name: MacOS Build
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          mkdir -v -p build/macos
-          EXPORT_DIR="$(readlink -f build)"
-          godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.app"
+          mkdir -v -p "build/${{ matrix.platform }}"
+          godot --headless --verbose --export-release "$preset" "$output"
 
       - name: Add coi-service-worker
+        if: matrix.platform == 'web'
         working-directory: ${{ env.PROJECT_PATH }}
         run: |
           git clone https://github.com/gzuidhof/coi-serviceworker.git
@@ -91,7 +117,7 @@ jobs:
           sed -i '3 i <script src="coi-serviceworker.js"></script>' build/web/index.html
 
       - name: 🚀 Deploy to `gh-pages` branch # Push - deploy to main directory
-        if: github.event_name == 'push'
+        if: matrix.platform == 'web' && github.event_name == 'push'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -106,7 +132,7 @@ jobs:
           commit_message: "Deploy main branch push to main directory"
 
       - name: 🚀 Deploy to `gh-pages` branch # PR - deploy to subdirectory
-        if: github.event_name == 'pull_request'
+        if: matrix.platform == 'web' && github.event_name == 'pull_request'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -119,36 +145,15 @@ jobs:
           commit_message: "Deploy PR web deploy to subdirectory ${{ github.event.number }}"
           destination_dir: ${{ github.event.number }}
 
-      - name: Zip Web artifacts
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: zip -r "${{ env.PROJECT_NAME }}_web.zip" build/web
-
-      - name: Upload Web artifacts
+      - name: Upload ${{ matrix.platform }} artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}_web
-          path: ${{ env.PROJECT_PATH }}/${{ env.PROJECT_NAME }}_web.zip
-          
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_windows
-          path: ${{ env.PROJECT_PATH }}/build/windows
-
-      - name: Upload MacOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_macos
-          path: ${{ env.PROJECT_PATH }}/build/macos
-          
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}_linux
-          path: ${{ env.PROJECT_PATH }}/build/linux
+          name: ${{ matrix.platform }}
+          path: ${{ env.PROJECT_PATH }}/build/${{ matrix.platform }}
+          if-no-files-found: error
 
   Github-page-release: # Push only - create github releases
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     needs: [Builds]
     runs-on: ubuntu-latest
     permissions:
@@ -178,7 +183,13 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}_web
+          name: web
+          path: artifacts/web
+
+      - name: Package Web release
+        run: |
+          cd artifacts/web
+          zip -q -r "../../${{ env.PROJECT_NAME }}_web.zip" .
 
       - name: Create Release
         id: create_release
@@ -203,96 +214,121 @@ jobs:
           asset_path: ${{ env.PROJECT_NAME }}_web.zip
           asset_name: "${{ env.PROJECT_NAME }}_web.zip"
           asset_content_type: application/zip
-  Check-Secrets:
+  Deploy:
+    name: Deploy selected builds
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [Builds]
     runs-on: ubuntu-latest
-    outputs:
-      has_steam: ${{ steps.check.outputs.has_steam }}
-      has_itch: ${{ steps.check.outputs.has_itch }}
     steps:
-      - id: check
+      - name: Download all selected builds
+        uses: actions/download-artifact@v4
+        with:
+          path: build
+
+      - name: Detect deployments and Steam depots
+        id: detect
+        shell: bash
+        env:
+          ITCH_IO_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+          ITCH_USERNAME: ${{ env.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ env.ITCH_GAMENAME }}
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
+        run: |
+          set -euo pipefail
+
+          has_desktop=false
+          has_macos=false
+          if [[ -d build/windows ]]; then
+            echo 'WINDOWS_DEPOT=windows' >> "$GITHUB_ENV"
+            has_desktop=true
+          fi
+          if [[ -d build/linux ]]; then
+            echo 'LINUX_DEPOT=linux' >> "$GITHUB_ENV"
+            has_desktop=true
+          fi
+          if [[ -d build/macos ]]; then
+            echo 'MACOS_DEPOT=macos' >> "$GITHUB_ENV"
+            has_desktop=true
+            has_macos=true
+          fi
+
+          has_itch=false
+          if [[ -n "$ITCH_IO_API_KEY" && -n "$ITCH_USERNAME" && -n "$ITCH_GAMENAME" ]]; then
+            has_itch=true
+          fi
+
+          has_steam=false
+          if [[ "$has_desktop" == "true" && -n "$STEAM_USERNAME" && -n "$STEAM_CONFIG_VDF" && "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
+            has_steam=true
+          fi
+
+          echo "has_itch=$has_itch" >> "$GITHUB_OUTPUT"
+          echo "has_steam=$has_steam" >> "$GITHUB_OUTPUT"
+          echo "has_macos=$has_macos" >> "$GITHUB_OUTPUT"
+
+      - name: Install Butler
+        if: steps.detect.outputs.has_itch == 'true'
         shell: bash
         run: |
-          # Check Steam
-          if [ -z "${{ secrets.STEAM_CONFIG_VDF }}" ]; then
-            echo "has_steam=false" >> $GITHUB_OUTPUT
-          elif [ -z "${{ secrets.STEAM_USERNAME }}" ]; then
-            echo "has_steam=false" >> $GITHUB_OUTPUT
-          elif [ -z "${{ secrets.STEAM_APPID }}" ]; then
-            echo "has_steam=false" >> $GITHUB_OUTPUT
-          else
-            echo "has_steam=true" >> $GITHUB_OUTPUT
-          fi
-          # Check Itch
-          if [ -z "${{ secrets.ITCH_IO_API_KEY }}" ]; then
-            echo "has_itch=false" >> $GITHUB_OUTPUT
-          else
-            echo "has_itch=true" >> $GITHUB_OUTPUT
-          fi          
-          
-  Itch-deploy: # Push only - create itch releases
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.Check-Secrets.outputs.has_itch == 'true'
-    needs: [Builds, Check-Secrets]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        lfs: true
+          set -euo pipefail
+          curl --fail --show-error --silent --location \
+            --output butler.zip \
+            "${{ env.ITCH_BUTLER_URL }}"
+          unzip -q butler.zip
+          chmod +x butler
 
-    - name: Download Web artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.PROJECT_NAME }}_web
+      - name: Deploy selected builds to itch.io
+        if: steps.detect.outputs.has_itch == 'true'
+        shell: bash
+        env:
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          set -euo pipefail
+          for folder in build/*; do
+            [[ -d "$folder" ]] || continue
+            platform="$(basename "$folder")"
 
-    - uses: manleydev/butler-publish-itchio-action@master
-      env:
-        BUTLER_CREDENTIALS: ${{ secrets.ITCH_IO_API_KEY }}
-        CHANNEL: HTML
-        ITCH_GAME: ${{ env.ITCH_GAMENAME }}
-        ITCH_USER: ${{ env.ITCH_USERNAME }}
-        PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
-  Steam-deploy: # Push only - deploy for steam
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.Check-Secrets.outputs.has_steam == 'true'
-    needs: [Builds, Check-Secrets]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Download Windows Build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.PROJECT_NAME }}_windows
-        path: ${{ env.PROJECT_PATH }}/build/windows
+            case "$platform" in
+              web) channel='html5' ;;
+              windows) channel='windows' ;;
+              linux) channel='linux' ;;
+              macos) channel='macos' ;;
+              *) continue ;;
+            esac
 
-    - name: Download MacOS Build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.PROJECT_NAME }}_macos
-        path: ${{ env.PROJECT_PATH }}/build/macos
-        
-    - name: Download Linux Build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.PROJECT_NAME }}_linux
-        path: ${{ env.PROJECT_PATH }}/build/linux
+            echo "Uploading $platform to itch.io channel $channel"
+            ./butler push "$folder" "${ITCH_USERNAME}/${ITCH_GAMENAME}:$channel"
+          done
 
-    # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
-    - uses: game-ci/steam-deploy@v3
-      with:
-        username: ${{ secrets.STEAM_USERNAME }}          
-        configVdf: ${{ secrets.STEAM_CONFIG_VDF}}         
-        appId: ${{ secrets.STEAM_APPID }}
-        buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
-        rootPath: ${{ env.PROJECT_PATH }}/build
-        depot1Path: windows
-        # depot1InstallScriptPath: StandaloneWindows64/install_script.vdf
-        depot2Path: macos
-        depot3Path: linux
-        # Might be too dangerous to immediately release the build onto some branch.
-        # Steam-ci also doesn't support releasing to a branch protected by password for now it seems.
-        # So for now, manually release the build to the correct branch on steamworks.
-        # releaseBranch: develop
+      - name: Extract macOS package for Steam
+        if: steps.detect.outputs.has_steam == 'true' && steps.detect.outputs.has_macos == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(build/macos/*.zip)
+          for archive in "${archives[@]}"; do
+            unzip -q "$archive" -d build/macos
+            rm "$archive"
+          done
+
+      - name: Deploy selected desktop builds to Steam
+        if: steps.detect.outputs.has_steam == 'true'
+        uses: game-ci/steam-deploy@v3
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          appId: ${{ vars.STEAM_APP_ID }}
+          buildDescription: Auto Steam Deploy ${{ github.sha }}
+          rootPath: build
+          depot1Path: ${{ env.WINDOWS_DEPOT }}
+          depot2Path: ${{ env.LINUX_DEPOT }}
+          depot3Path: ${{ env.MACOS_DEPOT }}
          
   PR-comment-update: # PR only - comment preview link
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
     needs: [Builds]
     runs-on: ubuntu-latest
     permissions: 
