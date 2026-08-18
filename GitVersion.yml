@@ -1,10 +1,8 @@
-assembly-versioning-scheme: MajorMinorPatch
-mode: ContinuousDelivery
-branches: {}
-ignore:
-  sha: []
-merge-message-formats: {}
+workflow: GitHubFlow/v1
+mode: MainLine
+
 commit-message-incrementing: Enabled
-major-version-bump-message: "^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([\\w\\s-]*\\))?(!:|:.*\\n\\n((.+\\n)+\\n)?BREAKING CHANGE:\\s.+)"
-minor-version-bump-message: "^(feat)(\\([\\w\\s-]*\\))?:"
+
+major-version-bump-message: "^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([\\w\\s,/\\\\-]*\\)|/[\\w./\\\\-]+)?(!:|:.*\\n\\n((.+\\n)+\\n)?BREAKING[ -]CHANGE:\\s.+)"
+minor-version-bump-message: "^feat(\\([\\w\\s,/\\\\-]*\\))?[:/]"
 patch-version-bump-message: "^(build|chore|ci|docs|fix|perf|refactor|revert|style|test)(\\([\\w\\s-]*\\))?:"
