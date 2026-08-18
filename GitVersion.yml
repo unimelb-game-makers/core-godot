@@ -1,7 +1,11 @@
 workflow: GitHubFlow/v1
-mode: MainLine
+strategies:
+  - ConfiguredNextVersion
+  - Mainline
 
+assembly-versioning-scheme: MajorMinorPatch
 commit-message-incrementing: Enabled
+
 
 major-version-bump-message: "^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\\([\\w\\s,/\\\\-]*\\)|/[\\w./\\\\-]+)?(!:|:.*\\n\\n((.+\\n)+\\n)?BREAKING[ -]CHANGE:\\s.+)"
 minor-version-bump-message: "^feat(\\([\\w\\s,/\\\\-]*\\))?[:/]"
