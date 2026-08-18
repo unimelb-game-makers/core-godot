@@ -3,6 +3,10 @@ name: "Godot CI/CD"
 # Configuration required before using this workflow:
 # - GODOT_VERSION: Godot version used by the CI container and export templates.
 # - PROJECT_NAME: Base name used for build files, artifacts, and Itch.io uploads.
+# - PROJECT_PATH: Folder containing project.godot, relative to the repository root.
+#   Use '.' when the project is stored at the repository root.
+# - ITCH_USERNAME: Account/subdomain name from username.itch.io.
+# - ITCH_GAME_NAME: URL slug from username.itch.io/game-name.
 #
 # Add these GitHub Actions secrets only for the deployment targets you use:
 # - Itch.io: ITCH_IO_API_KEY
@@ -14,7 +18,9 @@ name: "Godot CI/CD"
 env:
   GODOT_VERSION: 4.4.1
   PROJECT_NAME: 'ci_example'
-
+  PROJECT_PATH: '.'
+  ITCH_USERNAME: 'stego-studio'
+  ITCH_GAMENAME: 'ci_example'
 on:
   workflow_dispatch:
   push:
@@ -43,6 +49,7 @@ jobs:
           mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
 
       - name: Import assets
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           godot --headless --editor --quit-after 2
           godot --import --headless
@@ -51,29 +58,34 @@ jobs:
           godot --import --headless
 
       - name: Web Build
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           mkdir -v -p build/web
           godot -v --export-release --headless "Web"
 
       - name: Windows Build
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           mkdir -v -p build/windows
           EXPORT_DIR="$(readlink -f build)"
           godot --headless --verbose --export-release "Windows Desktop" "$EXPORT_DIR/windows/${{ env.PROJECT_NAME }}_windows.exe"
 
       - name: Linux Build
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           mkdir -v -p build/linux
           EXPORT_DIR="$(readlink -f build)"
           godot --headless --verbose --export-release "Linux/X11" "$EXPORT_DIR/linux/${{ env.PROJECT_NAME }}_linux.x86_64"
 
       - name: MacOS Build
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           mkdir -v -p build/macos
           EXPORT_DIR="$(readlink -f build)"
           godot --headless --verbose --export-release "macOS" "$EXPORT_DIR/macos/${{ env.PROJECT_NAME }}_mac.app"
 
       - name: Add coi-service-worker
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           git clone https://github.com/gzuidhof/coi-serviceworker.git
           mv coi-serviceworker/coi-serviceworker.js build/web/coi-serviceworker.js
@@ -84,7 +96,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build/web
+          publish_dir: ${{ env.PROJECT_PATH }}/build/web
           publish_branch: gh-pages
           force_orphan: true
           # NOTE: keeping files like this could be dangerous. Consider deleting stuff to save space if needed, depending on needs
@@ -99,7 +111,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build/web
+          publish_dir: ${{ env.PROJECT_PATH }}/build/web
           publish_branch: gh-pages
           force_orphan: true
           keep_files: true
@@ -109,31 +121,32 @@ jobs:
           destination_dir: ${{ github.event.number }}
 
       - name: Zip Web artifacts
+        working-directory: ${{ env.PROJECT_PATH }}
         run: zip -r "${{ env.PROJECT_NAME }}_web.zip" build/web
 
       - name: Upload Web artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}_web
-          path: ${{ env.PROJECT_NAME }}_web.zip
+          path: ${{ env.PROJECT_PATH }}/${{ env.PROJECT_NAME }}_web.zip
           
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}_windows
-          path: build/windows
+          path: ${{ env.PROJECT_PATH }}/build/windows
 
       - name: Upload MacOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}_macos
-          path: build/macos
+          path: ${{ env.PROJECT_PATH }}/build/macos
           
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}_linux
-          path: build/linux
+          path: ${{ env.PROJECT_PATH }}/build/linux
 
   Github-page-release: # Push only - create github releases
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -236,8 +249,8 @@ jobs:
       env:
         BUTLER_CREDENTIALS: ${{ secrets.ITCH_IO_API_KEY }}
         CHANNEL: HTML
-        ITCH_GAME: ${{ env.PROJECT_NAME }}
-        ITCH_USER: gmcunimelb
+        ITCH_GAME: ${{ env.ITCH_GAMENAME }}
+        ITCH_USER: ${{ env.ITCH_USERNAME }}
         PACKAGE: ${{ env.PROJECT_NAME }}_web.zip
   Steam-deploy: # Push only - deploy for steam
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.Check-Secrets.outputs.has_steam == 'true'
@@ -248,19 +261,19 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: ${{ env.PROJECT_NAME }}_windows
-        path: build/windows
+        path: ${{ env.PROJECT_PATH }}/build/windows
 
     - name: Download MacOS Build artifacts
       uses: actions/download-artifact@v4
       with:
         name: ${{ env.PROJECT_NAME }}_macos
-        path: build/macos
+        path: ${{ env.PROJECT_PATH }}/build/macos
         
     - name: Download Linux Build artifacts
       uses: actions/download-artifact@v4
       with:
         name: ${{ env.PROJECT_NAME }}_linux
-        path: build/linux
+        path: ${{ env.PROJECT_PATH }}/build/linux
 
     # https://github.com/game-ci/steam-deploy, using configVdf to authenticate
     - uses: game-ci/steam-deploy@v3
@@ -269,7 +282,7 @@ jobs:
         configVdf: ${{ secrets.STEAM_CONFIG_VDF}}         
         appId: ${{ secrets.STEAM_APPID }}
         buildDescription: Auto Steam Deploy ${{env.GitVersion_FullSemVer}}
-        rootPath: build
+        rootPath: ${{ env.PROJECT_PATH }}/build
         depot1Path: windows
         # depot1InstallScriptPath: StandaloneWindows64/install_script.vdf
         depot2Path: macos
