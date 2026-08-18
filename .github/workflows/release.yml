@@ -1,0 +1,357 @@
+name: Godot release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    name: Validate release configuration
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.platforms.outputs.platforms }}
+      desktop_platforms: ${{ steps.platforms.outputs.desktop_platforms }}
+      web_enabled: ${{ steps.platforms.outputs.web_enabled }}
+      has_desktop: ${{ steps.platforms.outputs.has_desktop }}
+    steps:
+      - name: Checkout configuration
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Resolve build platforms
+        id: platforms
+        shell: bash
+        env:
+          BUILD_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
+          ENABLE_ITCH: ${{ vars.ENABLE_ITCH }}
+          ENABLE_STEAM: ${{ vars.ENABLE_STEAM }}
+        run: bash .github/scripts/resolve-build-platforms.sh
+
+  version:
+    name: Calculate release version
+    needs: configure
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      full_semver: ${{ steps.gitversion.outputs.fullSemVer }}
+      source_sha: ${{ steps.gitversion.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v4.7.0
+        with:
+          versionSpec: 6.8.x
+
+      - name: Calculate GitVersion
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.7.0
+        with:
+          useConfigFile: true
+          configFilePath: GitVersion.yml
+
+      - name: Validate calculated version
+        shell: bash
+        env:
+          FULL_SEMVER: ${{ steps.gitversion.outputs.fullSemVer }}
+          SOURCE_SHA: ${{ steps.gitversion.outputs.sha }}
+        run: |
+          set -euo pipefail
+          : "${FULL_SEMVER:?GitVersion did not produce FullSemVer}"
+          : "${SOURCE_SHA:?GitVersion did not produce Sha}"
+
+  build-web:
+    name: Build web release
+    needs: configure
+    if: needs.configure.outputs.web_enabled == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_godot-build.yml
+    with:
+      platform: web
+      godot_version: ${{ vars.GODOT_VERSION || '4.7.1' }}
+      project_name: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      project_path: ${{ vars.PROJECT_PATH || '.' }}
+
+  build-desktop:
+    name: Build ${{ matrix.platform }} release
+    needs: configure
+    if: needs.configure.outputs.has_desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.configure.outputs.desktop_platforms) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_godot-build.yml
+    with:
+      platform: ${{ matrix.platform }}
+      godot_version: ${{ vars.GODOT_VERSION || '4.7.1' }}
+      project_name: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      project_path: ${{ vars.PROJECT_PATH || '.' }}
+
+  github-release:
+    name: Publish GitHub prerelease
+    needs: [configure, version, build-web, build-desktop]
+    if: >-
+      always() &&
+      needs.configure.result == 'success' &&
+      needs.version.result == 'success' &&
+      (needs.configure.outputs.web_enabled != 'true' || needs.build-web.result == 'success') &&
+      (needs.configure.outputs.has_desktop != 'true' || needs.build-desktop.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: github-release-${{ needs.version.outputs.full_semver }}
+      queue: max
+    env:
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+    steps:
+      - name: Download selected build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          mapfile -t platforms < <(jq -r '.[]' <<<"$SELECTED_PLATFORMS")
+
+          for platform in "${platforms[@]}"; do
+            source_dir="artifacts/${platform}"
+            archive_path="${GITHUB_WORKSPACE}/release-assets/${PROJECT_NAME}_${platform}.zip"
+            test -d "$source_dir"
+
+            if [[ "$platform" == 'linux' ]]; then
+              linux_binary="${source_dir}/${PROJECT_NAME}_linux.x86_64"
+              test -f "$linux_binary"
+              chmod +x "$linux_binary"
+            fi
+
+            if [[ "$platform" == 'macos' ]]; then
+              macos_archive="${source_dir}/${PROJECT_NAME}_macos.zip"
+              test -s "$macos_archive"
+              cp "$macos_archive" "$archive_path"
+            else
+              (
+                cd "$source_dir"
+                zip -q -r "$archive_path" .
+              )
+            fi
+
+            test -s "$archive_path"
+          done
+
+      - name: Create or update GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.version.outputs.full_semver }}
+          TARGET_SHA: ${{ needs.version.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; replacing selected assets."
+          else
+            gh release create "$TAG_NAME" \
+              --target "$TARGET_SHA" \
+              --title "$TAG_NAME" \
+              --notes "Automated prerelease for ${TAG_NAME}." \
+              --prerelease
+          fi
+
+          gh release upload "$TAG_NAME" release-assets/*.zip --clobber
+
+  deploy-itch:
+    name: Deploy selected builds to itch.io
+    needs: [configure, version, build-web, build-desktop]
+    if: >-
+      always() &&
+      vars.ENABLE_ITCH == 'true' &&
+      needs.configure.result == 'success' &&
+      needs.version.result == 'success' &&
+      (needs.configure.outputs.web_enabled != 'true' || needs.build-web.result == 'success') &&
+      (needs.configure.outputs.has_desktop != 'true' || needs.build-desktop.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: itch-production
+    concurrency:
+      group: itch-production
+      queue: max
+    env:
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+    steps:
+      - name: Download selected build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: build
+
+      - name: Validate itch.io configuration
+        shell: bash
+        env:
+          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${ITCH_USERNAME:?Set ITCH_USERNAME in itch-production}"
+          : "${ITCH_GAMENAME:?Set ITCH_GAMENAME in itch-production}"
+          : "${ITCH_BUTLER_URL:?Set ITCH_BUTLER_URL in itch-production}"
+          : "${BUTLER_API_KEY:?Set ITCH_IO_API_KEY in itch-production}"
+
+      - name: Install Butler
+        shell: bash
+        env:
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location \
+            --output butler.zip \
+            "$ITCH_BUTLER_URL"
+          unzip -q butler.zip
+          chmod +x butler
+
+      - name: Upload selected channels
+        shell: bash
+        env:
+          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          set -euo pipefail
+          mapfile -t platforms < <(jq -r '.[]' <<<"$SELECTED_PLATFORMS")
+
+          for platform in "${platforms[@]}"; do
+            folder="build/${platform}"
+            test -d "$folder"
+
+            case "$platform" in
+              web) channel='html5' ;;
+              windows) channel='windows' ;;
+              linux)
+                channel='linux'
+                chmod +x "${folder}/${PROJECT_NAME}_linux.x86_64"
+                ;;
+              macos) channel='macos' ;;
+            esac
+
+            ./butler push "$folder" "${ITCH_USERNAME}/${ITCH_GAMENAME}:${channel}"
+          done
+
+  deploy-steam:
+    name: Deploy desktop builds to Steam
+    needs: [configure, version, build-desktop]
+    if: >-
+      always() &&
+      vars.ENABLE_STEAM == 'true' &&
+      needs.configure.result == 'success' &&
+      needs.version.result == 'success' &&
+      needs.configure.outputs.has_desktop == 'true' &&
+      needs.build-desktop.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: steam-production
+    concurrency:
+      group: steam-production
+      queue: max
+    env:
+      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
+      SELECTED_PLATFORMS: ${{ needs.configure.outputs.platforms }}
+    steps:
+      - name: Validate Steam configuration
+        shell: bash
+        env:
+          STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+        run: |
+          set -euo pipefail
+          : "${STEAM_USERNAME:?Set STEAM_USERNAME in steam-production}"
+          : "${STEAM_CONFIG_VDF:?Set STEAM_CONFIG_VDF in steam-production}"
+          if [[ ! "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
+            echo 'Set STEAM_APP_ID to a numeric value in steam-production.' >&2
+            exit 1
+          fi
+
+      - name: Download Windows artifact
+        if: contains(fromJSON(needs.configure.outputs.platforms), 'windows')
+        uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: build/windows
+
+      - name: Download Linux artifact
+        if: contains(fromJSON(needs.configure.outputs.platforms), 'linux')
+        uses: actions/download-artifact@v8
+        with:
+          name: linux
+          path: build/linux
+
+      - name: Download macOS artifact
+        if: contains(fromJSON(needs.configure.outputs.platforms), 'macos')
+        uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: build/macos
+
+      - name: Prepare Steam depot contents
+        id: depots
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -d build/windows ]]; then
+            echo 'depot1=windows' >>"$GITHUB_OUTPUT"
+          fi
+
+          if [[ -d build/linux ]]; then
+            chmod +x "build/linux/${PROJECT_NAME}_linux.x86_64"
+            echo 'depot2=linux' >>"$GITHUB_OUTPUT"
+          fi
+
+          if [[ -d build/macos ]]; then
+            shopt -s nullglob
+            archives=(build/macos/*.zip)
+            if [[ "${#archives[@]}" -eq 0 ]]; then
+              echo 'The macOS artifact does not contain an export archive.' >&2
+              exit 1
+            fi
+            for archive in "${archives[@]}"; do
+              unzip -q "$archive" -d build/macos
+              rm -- "$archive"
+            done
+            echo 'depot3=macos' >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Steam depots
+        uses: game-ci/steam-deploy@v3
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          appId: ${{ vars.STEAM_APP_ID }}
+          buildDescription: ${{ needs.version.outputs.full_semver }}
+          rootPath: build
+          depot1Path: ${{ steps.depots.outputs.depot1 }}
+          depot2Path: ${{ steps.depots.outputs.depot2 }}
+          depot3Path: ${{ steps.depots.outputs.depot3 }}
