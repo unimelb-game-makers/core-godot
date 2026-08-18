@@ -6,7 +6,7 @@ name: "Godot CI/CD"
 # - PROJECT_PATH: Folder containing project.godot, relative to the repository root.
 #   Use '.' when the project is stored at the repository root.
 # - ITCH_USERNAME: Account/subdomain name from username.itch.io.
-# - ITCH_GAME_NAME: URL slug from username.itch.io/game-name.
+# - ITCH_GAMENAME: URL slug from username.itch.io/game-name.
 #
 # Add these GitHub Actions secrets only for the deployment targets you use:
 # - Itch.io: ITCH_IO_API_KEY
