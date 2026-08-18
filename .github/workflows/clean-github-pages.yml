@@ -6,9 +6,6 @@ on:
   pull_request_target:
     types: [closed]
 
-
-
-
 jobs:
   clean-preview:
     runs-on: ubuntu-latest
