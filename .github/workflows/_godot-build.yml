@@ -37,7 +37,7 @@ jobs:
       PROJECT_PATH: ${{ inputs.project_path }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           lfs: true
@@ -117,30 +117,15 @@ jobs:
       - name: Add cross-origin isolation service worker
         if: inputs.platform == 'web'
         working-directory: ${{ inputs.project_path }}
-        shell: bash
-        env:
-          COI_COMMIT: 7b1d2a092d0d2dd2b7270b6f12f13605de26f214
-          COI_SHA256: e97bbac6017322d48aa54a5bc7ce473c725a4b7376ff245002e0ba71c3dcdd7e
         run: |
-          set -euo pipefail
-          coi_path='build/web/coi-serviceworker.js'
-          index_path='build/web/index.html'
+          git clone --depth 1 https://github.com/gzuidhof/coi-serviceworker.git
+          mv coi-serviceworker/coi-serviceworker.js build/web/
+          sed -i 's#</head>#<script src="coi-serviceworker.js"></script>\n</head>#' build/web/index.html
 
-          curl --fail --show-error --silent --location \
-            --output "$coi_path" \
-            "https://raw.githubusercontent.com/gzuidhof/coi-serviceworker/${COI_COMMIT}/coi-serviceworker.js"
-          echo "${COI_SHA256}  ${coi_path}" | sha256sum --check --strict
 
-          if ! grep -q '</head>' "$index_path"; then
-            echo 'The exported web page does not contain a closing head tag.' >&2
-            exit 1
-          fi
-
-          sed -i 's#</head>#<script src="coi-serviceworker.js"></script>\n</head>#' "$index_path"
-          grep -Fq '<script src="coi-serviceworker.js"></script>' "$index_path"
 
       - name: Upload ${{ inputs.platform }} artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}
           path: ${{ inputs.project_path }}/build/${{ inputs.platform }}

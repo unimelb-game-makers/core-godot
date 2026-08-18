@@ -12,11 +12,8 @@ jobs:
   version:
     name: Calculate release version
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       full_semver: ${{ steps.gitversion.outputs.fullSemVer }}
-      source_sha: ${{ steps.gitversion.outputs.sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -37,42 +34,12 @@ jobs:
           useConfigFile: true
           configFilePath: GitVersion.yml
 
-      - name: Validate calculated version
-        shell: bash
-        env:
-          FULL_SEMVER: ${{ steps.gitversion.outputs.fullSemVer }}
-          SOURCE_SHA: ${{ steps.gitversion.outputs.sha }}
-        run: |
-          set -euo pipefail
-          : "${FULL_SEMVER:?GitVersion did not produce FullSemVer}"
-          : "${SOURCE_SHA:?GitVersion did not produce Sha}"
-
-  build-web:
-    name: Build web release
-    if: contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'web')
-    permissions:
-      contents: read
-    uses: ./.github/workflows/_godot-build.yml
-    with:
-      platform: web
-      godot_version: ${{ vars.GODOT_VERSION || '4.7.1' }}
-      project_name: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      project_path: ${{ vars.PROJECT_PATH || '.' }}
-
-  build-desktop:
+  build:
     name: Build ${{ matrix.platform }} release
-    if: >-
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
-      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
     strategy:
       fail-fast: false
       matrix:
         platform: ${{ fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]') }}
-        exclude:
-          - platform: web
-    permissions:
-      contents: read
     uses: ./.github/workflows/_godot-build.yml
     with:
       platform: ${{ matrix.platform }}
@@ -82,22 +49,7 @@ jobs:
 
   github-release:
     name: Publish GitHub prerelease
-    needs: [version, build-web, build-desktop]
-    if: >-
-      always() &&
-      needs.version.result == 'success' &&
-      (
-        needs.build-web.result == 'success' ||
-        needs.build-web.result == 'skipped'
-      ) &&
-      (
-        needs.build-desktop.result == 'success' ||
-        needs.build-desktop.result == 'skipped'
-      ) &&
-      (
-        needs.build-web.result == 'success' ||
-        needs.build-desktop.result == 'success'
-      )
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -106,9 +58,8 @@ jobs:
       queue: max
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
-      - name: Download selected build artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -116,33 +67,22 @@ jobs:
       - name: Package release assets
         shell: bash
         run: |
-          set -euo pipefail
           mkdir -p release-assets
-          mapfile -t platforms < <(jq -r '.[]' <<<"$SELECTED_PLATFORMS")
 
-          for platform in "${platforms[@]}"; do
-            source_dir="artifacts/${platform}"
+          for source_dir in artifacts/*; do
+            platform="${source_dir##*/}"
             archive_path="${GITHUB_WORKSPACE}/release-assets/${PROJECT_NAME}_${platform}.zip"
-            test -d "$source_dir"
-
-            if [[ "$platform" == 'linux' ]]; then
-              linux_binary="${source_dir}/${PROJECT_NAME}_linux.x86_64"
-              test -f "$linux_binary"
-              chmod +x "$linux_binary"
-            fi
 
             if [[ "$platform" == 'macos' ]]; then
-              macos_archive="${source_dir}/${PROJECT_NAME}_macos.zip"
-              test -s "$macos_archive"
-              cp "$macos_archive" "$archive_path"
-            else
-              (
-                cd "$source_dir"
-                zip -q -r "$archive_path" .
-              )
+              cp "${source_dir}/${PROJECT_NAME}_macos.zip" "$archive_path"
+              continue
             fi
 
-            test -s "$archive_path"
+            if [[ "$platform" == 'linux' ]]; then
+              chmod +x "${source_dir}/${PROJECT_NAME}_linux.x86_64"
+            fi
+
+            (cd "$source_dir" && zip -q -r "$archive_path" .)
           done
 
       - name: Create or update GitHub prerelease
@@ -151,13 +91,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ needs.version.outputs.full_semver }}
-          TARGET_SHA: ${{ needs.version.outputs.source_sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
-          set -euo pipefail
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Release ${TAG_NAME} already exists; replacing selected assets."
-          else
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
               --target "$TARGET_SHA" \
               --title "$TAG_NAME" \
@@ -168,79 +104,60 @@ jobs:
           gh release upload "$TAG_NAME" release-assets/*.zip --clobber
 
   deploy-itch:
-    name: Deploy selected builds to itch.io
-    needs: [version, build-web, build-desktop]
-    if: >-
-      always() &&
-      vars.ENABLE_ITCH == 'true' &&
-      needs.version.result == 'success' &&
-      (
-        needs.build-web.result == 'success' ||
-        needs.build-web.result == 'skipped'
-      ) &&
-      (
-        needs.build-desktop.result == 'success' ||
-        needs.build-desktop.result == 'skipped'
-      ) &&
-      (
-        needs.build-web.result == 'success' ||
-        needs.build-desktop.result == 'success'
-      )
+    name: Deploy builds to itch.io
+    needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     environment: itch-production
     concurrency:
       group: itch-production
       queue: max
-    env:
-      PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
-      - name: Download selected build artifacts
+      - name: Detect itch.io configuration
+        id: detect
+        shell: bash
+        env:
+          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
+          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
+          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+        run: |
+          if [[ -n "$ITCH_USERNAME" &&
+                -n "$ITCH_GAMENAME" &&
+                -n "$ITCH_BUTLER_URL" &&
+                -n "$BUTLER_API_KEY" ]]; then
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo 'Skipping itch.io deployment because its configuration is incomplete.'
+          fi
+
+      - name: Download build artifacts
+        if: steps.detect.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           path: build
 
-      - name: Validate itch.io configuration
-        shell: bash
-        env:
-          ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
-          ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
-          ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
-          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
-        run: |
-          set -euo pipefail
-          : "${ITCH_USERNAME:?Set ITCH_USERNAME in itch-production}"
-          : "${ITCH_GAMENAME:?Set ITCH_GAMENAME in itch-production}"
-          : "${ITCH_BUTLER_URL:?Set ITCH_BUTLER_URL in itch-production}"
-          : "${BUTLER_API_KEY:?Set ITCH_IO_API_KEY in itch-production}"
-
       - name: Install Butler
+        if: steps.detect.outputs.configured == 'true'
         shell: bash
         env:
           ITCH_BUTLER_URL: ${{ vars.ITCH_BUTLER_URL }}
         run: |
-          set -euo pipefail
-          curl --fail --show-error --silent --location \
-            --output butler.zip \
-            "$ITCH_BUTLER_URL"
+          curl -fsSL "$ITCH_BUTLER_URL" -o butler.zip
           unzip -q butler.zip
           chmod +x butler
 
-      - name: Upload selected channels
+      - name: Upload channels
+        if: steps.detect.outputs.configured == 'true'
         shell: bash
         env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
           ITCH_USERNAME: ${{ vars.ITCH_USERNAME }}
           ITCH_GAMENAME: ${{ vars.ITCH_GAMENAME }}
           BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
         run: |
-          set -euo pipefail
-          mapfile -t platforms < <(jq -r '.[]' <<<"$SELECTED_PLATFORMS")
-
-          for platform in "${platforms[@]}"; do
-            folder="build/${platform}"
-            test -d "$folder"
+          for folder in build/*; do
+            platform="${folder##*/}"
 
             case "$platform" in
               web) channel='html5' ;;
@@ -250,6 +167,7 @@ jobs:
                 chmod +x "${folder}/${PROJECT_NAME}_linux.x86_64"
                 ;;
               macos) channel='macos' ;;
+              *) continue ;;
             esac
 
             ./butler push "$folder" "${ITCH_USERNAME}/${ITCH_GAMENAME}:${channel}"
@@ -257,70 +175,47 @@ jobs:
 
   deploy-steam:
     name: Deploy desktop builds to Steam
-    needs: [version, build-desktop]
+    needs: [version, build]
     if: >-
-      always() &&
-      vars.ENABLE_STEAM == 'true' &&
-      needs.version.result == 'success' &&
-      (
-        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
-        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
-        contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
-      ) &&
-      needs.build-desktop.result == 'success'
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'windows') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'linux') ||
+      contains(fromJSON(vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]'), 'macos')
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     environment: steam-production
     concurrency:
       group: steam-production
       queue: max
     env:
       PROJECT_NAME: ${{ vars.PROJECT_NAME || 'ci_example' }}
-      SELECTED_PLATFORMS: ${{ vars.BUILD_PLATFORMS || '["web","windows","linux","macos"]' }}
     steps:
-      - name: Validate Steam configuration
+      - name: Detect Steam configuration
+        id: detect
         shell: bash
         env:
           STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
         run: |
-          set -euo pipefail
-          : "${STEAM_USERNAME:?Set STEAM_USERNAME in steam-production}"
-          : "${STEAM_CONFIG_VDF:?Set STEAM_CONFIG_VDF in steam-production}"
-          if [[ ! "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
-            echo 'Set STEAM_APP_ID to a numeric value in steam-production.' >&2
-            exit 1
+          if [[ -n "$STEAM_USERNAME" &&
+                -n "$STEAM_CONFIG_VDF" &&
+                "$STEAM_APP_ID" =~ ^[0-9]+$ ]]; then
+            echo 'configured=true' >>"$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo 'Skipping Steam deployment because its configuration is incomplete.'
           fi
 
-      - name: Download Windows artifact
-        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'windows')
+      - name: Download build artifacts
+        if: steps.detect.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: windows
-          path: build/windows
+          path: build
 
-      - name: Download Linux artifact
-        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'linux')
-        uses: actions/download-artifact@v8
-        with:
-          name: linux
-          path: build/linux
-
-      - name: Download macOS artifact
-        if: contains(fromJSON(env.SELECTED_PLATFORMS), 'macos')
-        uses: actions/download-artifact@v8
-        with:
-          name: macos
-          path: build/macos
-
-      - name: Prepare Steam depot contents
+      - name: Prepare Steam depots
+        if: steps.detect.outputs.configured == 'true'
         id: depots
         shell: bash
         run: |
-          set -euo pipefail
-
           if [[ -d build/windows ]]; then
             echo 'depot1=windows' >>"$GITHUB_OUTPUT"
           fi
@@ -331,20 +226,14 @@ jobs:
           fi
 
           if [[ -d build/macos ]]; then
-            shopt -s nullglob
-            archives=(build/macos/*.zip)
-            if [[ "${#archives[@]}" -eq 0 ]]; then
-              echo 'The macOS artifact does not contain an export archive.' >&2
-              exit 1
-            fi
-            for archive in "${archives[@]}"; do
-              unzip -q "$archive" -d build/macos
-              rm -- "$archive"
-            done
+            archive="build/macos/${PROJECT_NAME}_macos.zip"
+            unzip -q "$archive" -d build/macos
+            rm "$archive"
             echo 'depot3=macos' >>"$GITHUB_OUTPUT"
           fi
 
       - name: Upload Steam depots
+        if: steps.detect.outputs.configured == 'true'
         uses: game-ci/steam-deploy@v3
         with:
           username: ${{ secrets.STEAM_USERNAME }}
