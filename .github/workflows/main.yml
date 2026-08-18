@@ -1,5 +1,16 @@
 name: "Godot CI/CD"
 
+# Configuration required before using this workflow:
+# - GODOT_VERSION: Godot version used by the CI container and export templates.
+# - PROJECT_NAME: Base name used for build files, artifacts, and Itch.io uploads.
+#
+# Add these GitHub Actions secrets only for the deployment targets you use:
+# - Itch.io: ITCH_IO_API_KEY
+# - Steam: STEAM_CONFIG_VDF, STEAM_USERNAME, and STEAM_APPID
+#
+# GITHUB_TOKEN, GITHUB_REF, and the `github.*` context values are supplied
+# automatically by GitHub Actions and do not need to be created manually.
+
 env:
   GODOT_VERSION: 4.4.1
   PROJECT_NAME: 'ci_example'
